@@ -156,12 +156,13 @@ impl FromStr for Schema {
                         header: sh,
                         body: String::from(sec),
                     }),
-                    ObjectType::Extension | ObjectType::Default => {
-                        schema.general.push(SchemaSection {
-                            header: sh,
-                            body: String::from(sec),
-                        })
-                    }
+                    ObjectType::Extension
+                    | ObjectType::Default
+                    | ObjectType::DefaultAcl
+                    | ObjectType::Schema => schema.general.push(SchemaSection {
+                        header: sh,
+                        body: String::from(sec),
+                    }),
                     ObjectType::Comment => schema.comments.push(SchemaSection {
                         header: sh,
                         body: String::from(sec),
@@ -184,7 +185,12 @@ impl FromStr for Schema {
 impl Schema {
     pub fn write_to_fs(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         // delete the existing fs
-        fs::remove_dir_all(path)?;
+        if let Err(e) = fs::remove_dir_all(path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(e.into());
+            }
+        }
+        fs::create_dir(path)?;
         for table in &self.tables {
             let section_path = path.join("tables").join(&table.header.schema);
             fs::create_dir_all(&section_path)?;
@@ -195,10 +201,7 @@ impl Schema {
 
         for function in &self.functions {
             let section_path = match function.header.name.contains("test_") {
-                true => path
-                    .join("tests")
-                    .join("functions")
-                    .join(&function.header.schema),
+                true => path.join("tests").join(&function.header.schema),
                 false => path.join("functions").join(&function.header.schema),
             };
             fs::create_dir_all(&section_path)?;
@@ -258,6 +261,14 @@ impl Schema {
             let mut file = fs::OpenOptions::new().append(true).create(true).open(fp)?;
 
             writeln!(file, "{}", index.body)?;
+        }
+
+        for setup_snippet in &self.general {
+            let mut file = fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(path.join("general.sql"))?;
+            writeln!(file, "{}", setup_snippet.body)?;
         }
         Ok(())
     }
