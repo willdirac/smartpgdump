@@ -43,30 +43,7 @@ impl FromStr for ObjectType {
             "CONSTRAINT" => Ok(ObjectType::Constraint),
             "ACL" => Ok(ObjectType::Acl),
             "SEQUENCE OWNED BY" => Ok(ObjectType::SequenceOwnedBy),
-            _ => Err(format!("Unknown object type: {}", s).into()),
-        }
-    }
-}
-
-impl ObjectType {
-    pub fn as_str(&self) -> &str {
-        match self {
-            ObjectType::Table => "TABLE",
-            ObjectType::FkConstraint => "FK CONSTRAINT",
-            ObjectType::Type => "TYPE",
-            ObjectType::Trigger => "TRIGGER",
-            ObjectType::Sequence => "SEQUENCE",
-            ObjectType::Function => "FUNCTION",
-            ObjectType::Comment => "COMMENT",
-            ObjectType::DefaultAcl => "DEFAULT ACL",
-            ObjectType::Index => "INDEX",
-            ObjectType::Extension => "EXTENSION",
-            ObjectType::Schema => "SCHEMA",
-            ObjectType::Domain => "DOMAIN",
-            ObjectType::Default => "DEFAULT",
-            ObjectType::Constraint => "CONSTRAINT",
-            ObjectType::Acl => "ACL",
-            ObjectType::SequenceOwnedBy => "SEQUENCE OWNED BY",
+            _ => Err(format!("Unknown object type: {s}").into()),
         }
     }
 }
@@ -76,7 +53,7 @@ pub struct SchemaHeader {
     name: String,
     object_type: ObjectType,
     schema: String,
-    owner: String,
+    _owner: String,
 }
 
 #[derive(Debug)]
@@ -121,7 +98,7 @@ impl FromStr for SchemaHeader {
                 .strip_prefix("Schema: ")
                 .ok_or("Missing Schema")?
                 .to_string(),
-            owner: parts[3]
+            _owner: parts[3]
                 .strip_prefix("Owner: ")
                 .ok_or("Missing Owner")?
                 .to_string(),
@@ -158,48 +135,46 @@ impl FromStr for Schema {
             if sh_holder.is_none() {
                 // we are waiting on a valid header
                 sh_holder = sec.parse::<SchemaHeader>().ok()
-            } else {
-                if let Some(sh) = sh_holder {
-                    // we are waiting on a  body
-                    match sh.object_type {
-                        ObjectType::Table => schema.tables.push(SchemaSection {
+            } else if let Some(sh) = sh_holder {
+                // we are waiting on a  body
+                match sh.object_type {
+                    ObjectType::Table => schema.tables.push(SchemaSection {
+                        header: sh,
+                        body: String::from(sec),
+                    }),
+                    ObjectType::Type | ObjectType::Domain => schema.types.push(SchemaSection {
+                        header: sh,
+                        body: String::from(sec),
+                    }),
+                    ObjectType::FkConstraint | ObjectType::Constraint => {
+                        schema.constraints.push(SchemaSection {
                             header: sh,
                             body: String::from(sec),
-                        }),
-                        ObjectType::Type | ObjectType::Domain => schema.types.push(SchemaSection {
-                            header: sh,
-                            body: String::from(sec),
-                        }),
-                        ObjectType::FkConstraint | ObjectType::Constraint => {
-                            schema.constraints.push(SchemaSection {
-                                header: sh,
-                                body: String::from(sec),
-                            })
-                        }
-                        ObjectType::Index => schema.indexes.push(SchemaSection {
-                            header: sh,
-                            body: String::from(sec),
-                        }),
-                        ObjectType::Extension | ObjectType::Default => {
-                            schema.general.push(SchemaSection {
-                                header: sh,
-                                body: String::from(sec),
-                            })
-                        }
-                        ObjectType::Comment => schema.comments.push(SchemaSection {
-                            header: sh,
-                            body: String::from(sec),
-                        }),
-                        ObjectType::Function | ObjectType::Trigger => {
-                            schema.functions.push(SchemaSection {
-                                header: sh,
-                                body: String::from(sec),
-                            })
-                        }
-                        _ => (),
+                        })
                     }
-                    sh_holder = None;
+                    ObjectType::Index => schema.indexes.push(SchemaSection {
+                        header: sh,
+                        body: String::from(sec),
+                    }),
+                    ObjectType::Extension | ObjectType::Default => {
+                        schema.general.push(SchemaSection {
+                            header: sh,
+                            body: String::from(sec),
+                        })
+                    }
+                    ObjectType::Comment => schema.comments.push(SchemaSection {
+                        header: sh,
+                        body: String::from(sec),
+                    }),
+                    ObjectType::Function | ObjectType::Trigger => {
+                        schema.functions.push(SchemaSection {
+                            header: sh,
+                            body: String::from(sec),
+                        })
+                    }
+                    _ => (),
                 }
+                sh_holder = None;
             }
         }
         Ok(schema)
@@ -208,10 +183,13 @@ impl FromStr for Schema {
 
 impl Schema {
     pub fn write_to_fs(&self, path: &Path) -> Result<(), Box<dyn Error>> {
+        // delete the existing fs
+        fs::remove_dir_all(path)?;
         for table in &self.tables {
             let section_path = path.join("tables").join(&table.header.schema);
             fs::create_dir_all(&section_path)?;
-            let fp = section_path.join(format!("{}.sql", table.header.name));
+            let table_name = &table.header.name;
+            let fp = section_path.join(format!("{table_name}.sql"));
             fs::write(fp, &table.body)?;
         }
 
@@ -224,14 +202,16 @@ impl Schema {
                 false => path.join("functions").join(&function.header.schema),
             };
             fs::create_dir_all(&section_path)?;
-            let fp = section_path.join(format!("{}.sql", function.header.name));
+            let function_name = &function.header.name;
+            let fp = section_path.join(format!("{function_name}.sql"));
             fs::write(fp, &function.body)?;
         }
 
         for sql_type in &self.types {
             let section_path = path.join("types").join(&sql_type.header.schema);
             fs::create_dir_all(&section_path)?;
-            let fp = section_path.join(format!("{}.sql", sql_type.header.name));
+            let type_name = &sql_type.header.name;
+            let fp = section_path.join(format!("{type_name}.sql"));
             fs::write(fp, &sql_type.body)?;
         }
 
@@ -251,7 +231,7 @@ impl Schema {
                 .replace('"', "");
             let section_path = path.join("tables").join(&constraint.header.schema);
             fs::create_dir_all(&section_path)?;
-            let fp = section_path.join(format!("{}.sql", table_name));
+            let fp = section_path.join(format!("{table_name}.sql"));
             let mut file = fs::OpenOptions::new().append(true).create(true).open(fp)?;
 
             writeln!(file, "{}", constraint.body)?;
@@ -274,7 +254,7 @@ impl Schema {
                 .replace('"', "");
             let section_path = path.join("tables").join(&index.header.schema);
             fs::create_dir_all(&section_path)?;
-            let fp = section_path.join(format!("{}.sql", table_name));
+            let fp = section_path.join(format!("{table_name}.sql"));
             let mut file = fs::OpenOptions::new().append(true).create(true).open(fp)?;
 
             writeln!(file, "{}", index.body)?;

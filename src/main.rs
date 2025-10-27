@@ -1,5 +1,4 @@
 mod structs;
-use std::collections::HashSet;
 use std::env::args;
 use std::path::Path;
 use std::{error::Error, process::Command};
@@ -16,13 +15,14 @@ fn get_dump(db_url: &str) -> Result<String, Box<dyn Error>> {
     }
     Ok(String::from_utf8(output.stdout)?)
 }
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = args().collect();
 
     let db_url = &args[1];
     let base_dir = Path::new(&args[2]);
-    println!("{}", db_url);
-    let output = get_dump(db_url).unwrap();
-    let schema = output.parse::<Schema>().unwrap();
-    schema.write_to_fs(base_dir).unwrap();
+    println!("{db_url}");
+    let output = get_dump(db_url)?;
+    let schema = output.parse::<Schema>()?;
+    schema.write_to_fs(base_dir)?;
+    Ok(())
 }
